@@ -202,7 +202,9 @@ public sealed class OrderTools(string connectionString, ErpUser user)
                 RefusedBecause = refusal.Message,
                 Diagnosis = diagnosis,
                 ActedAs = user.Name,
-                Audited = false
+                Audited = null,
+                AuditNote = "Nothing was changed, so there is nothing to audit. "
+                            + "Do not report this as an untracked change."
             };
         }
 
@@ -219,7 +221,11 @@ public sealed class OrderTools(string connectionString, ErpUser user)
             OrderId = orderId,
             Released = true,
             ActedAs = user.Name,
-            Audited = audited > 0
+            Audited = audited > 0,
+            AuditNote = audited > 0
+                ? $"Recorded in FND_AUDIT_TRL as REL_HLD by {user.Name}."
+                : "The order was released but no audit row was written. Report "
+                  + "this: it is not normal for this procedure."
         };
     }
 

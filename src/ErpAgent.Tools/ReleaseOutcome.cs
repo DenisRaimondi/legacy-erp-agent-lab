@@ -25,9 +25,16 @@ public sealed record ReleaseOutcome
     public required string ActedAs { get; init; }
 
     /// <summary>
-    /// True when SP_REL_ORD_HLD wrote the audit row. Reported rather than
-    /// assumed: in this database most state changes leave no trace, so the ones
-    /// that do are worth confirming.
+    /// True when SP_REL_ORD_HLD wrote the audit row, false when a change was
+    /// made without one, and <b>null when nothing was changed at all</b>.
+    ///
+    /// The three states matter. A plain false on a refusal reads as "it was done
+    /// and not recorded" — a specific and alarming claim in a database whose own
+    /// documented caveat is that a missing audit row proves nothing. Null keeps
+    /// the model from making it.
     /// </summary>
-    public required bool Audited { get; init; }
+    public bool? Audited { get; init; }
+
+    /// <summary>Says in words what <see cref="Audited"/> means here, so the model can pass it through.</summary>
+    public required string AuditNote { get; init; }
 }

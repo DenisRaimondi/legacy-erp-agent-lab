@@ -24,6 +24,24 @@ public class ReleaseOrderFromHoldTests
     }
 
     /// <summary>
+    /// Audited=false on a refusal reads as "it was done and not recorded", which
+    /// in this database is a specific and alarming claim — the walkthrough's own
+    /// caveat is that an absent audit row proves nothing. Nothing happened, so
+    /// the field has no value to report, and the note says so in words the model
+    /// can pass straight through.
+    /// </summary>
+    [Fact]
+    public async Task Does_not_claim_an_untracked_change_when_nothing_happened()
+    {
+        var tools = TestDatabase.ToolsFor("MROSSI", "credit");
+
+        var outcome = await tools.ReleaseOrderFromHoldAsync(1042);
+
+        Assert.Null(outcome.Audited);
+        Assert.Contains("nothing", outcome.AuditNote, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// The order stays held. Worth asserting on its own: a release path that
     /// half-applied its effects before refusing would be far worse than one
     /// that refuses.
