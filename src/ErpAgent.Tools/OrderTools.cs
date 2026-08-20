@@ -54,7 +54,7 @@ public sealed class OrderTools(string connectionString)
               LEFT JOIN dbo.AR_CUST_ACCT c ON c.CUST_ACCT_ID = h.CUST_ACCT_ID
              WHERE h.ORD_HDR_ID = @orderId;
             """,
-            new { orderId });
+            new { orderId }) ?? throw new OrderNotFoundException(orderId);
 
         var audit = await db.QueryAsync<AuditEntry>(
             """
@@ -69,7 +69,7 @@ public sealed class OrderTools(string connectionString)
             """,
             new { orderId });
 
-        return order! with
+        return order with
         {
             AuditRows = audit.ToArray(),
             AuditNote = AuditCaveat
@@ -107,7 +107,7 @@ public sealed class OrderTools(string connectionString)
               LEFT JOIN dbo.AR_CUST_ACCT c ON c.CUST_ACCT_ID = h.CUST_ACCT_ID
              WHERE h.ORD_HDR_ID = @orderId;
             """,
-            new { orderId });
+            new { orderId }) ?? throw new OrderNotFoundException(orderId);
 
         // Exposure as the credit trigger counts it: statuses N and H.
         var exposureUsedByHoldCheck = await db.ExecuteScalarAsync<decimal>(
@@ -117,7 +117,7 @@ public sealed class OrderTools(string connectionString)
              WHERE CUST_ACCT_ID = @customerId
                AND STS_FLG IN ('N','H');
             """,
-            new { customerId = order!.CustomerId });
+            new { customerId = order.CustomerId });
 
         // Exposure as the release path counts it. Call the procedure rather than
         // reimplementing it: the tool encapsulates the rule, it does not fork it.

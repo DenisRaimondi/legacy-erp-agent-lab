@@ -56,4 +56,16 @@ public class CheckReleaseEligibilityTests
         Assert.Equal("X", culprit.Status);
         Assert.Equal(2228.00m, culprit.Amount);
     }
+
+    [Fact]
+    public async Task Reports_a_missing_order_as_absent_and_says_gaps_are_normal()
+    {
+        var tools = new OrderTools(TestDatabase.ConnectionString);
+
+        var error = await Assert.ThrowsAsync<OrderNotFoundException>(
+            () => tools.CheckReleaseEligibilityAsync(1041));
+
+        Assert.Contains("1041", error.Message);
+        Assert.Contains("2011", error.Message);
+    }
 }

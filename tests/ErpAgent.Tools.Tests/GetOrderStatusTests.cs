@@ -51,4 +51,23 @@ public class GetOrderStatusTests
         Assert.Equal("CANC", entry.Action);
         Assert.Equal("LBIANCHI", entry.By);
     }
+
+    /// <summary>
+    /// Order ids run 1001 to 1078 with only 31 orders in between, because rows
+    /// were lost in the 2011 migration. A missing id is therefore an ordinary
+    /// outcome carrying real information, not a malfunction — and it must not
+    /// surface as a null reference, which reads to the model as a broken system
+    /// and invites it to speculate about corruption.
+    /// </summary>
+    [Fact]
+    public async Task Reports_a_missing_order_as_absent_and_says_gaps_are_normal()
+    {
+        var tools = new OrderTools(TestDatabase.ConnectionString);
+
+        var error = await Assert.ThrowsAsync<OrderNotFoundException>(
+            () => tools.GetOrderStatusAsync(1041));
+
+        Assert.Contains("1041", error.Message);
+        Assert.Contains("2011", error.Message);
+    }
 }
