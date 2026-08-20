@@ -25,6 +25,147 @@ public sealed class OrderTools(string connectionString, ErpUser user)
         + "credit holds and recalculate totals never write to it. An empty or short "
         + "trail is not evidence that nothing happened.";
 
+    /// <summary>
+    /// The order status codes, as documented in the schema. 'X' is in the list
+    /// because it is a legal code, not because anyone agrees what it means.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> StatusMeanings =
+        new Dictionary<string, string>
+        {
+            ["N"] = "new / open",
+            ["H"] = "on hold",
+            ["P"] = "posted",
+            ["S"] = "shipped",
+            ["X"] = "cancelled — contested, see the status note"
+        };
+
+    private const string StatusNote =
+        "Status codes: N new/open, H on hold, P posted, S shipped, X cancelled. "
+        + "'X' is read two ways in this system: SP_CANC_ORD and the credit trigger "
+        + "treat it as cancelled and stop counting the order, while "
+        + "SP_GET_CUST_EXPO counts it as still live. There is therefore no single "
+        + "definition of an 'open' order — say which codes you mean.";
+
+    [KernelFunction]
+    [Description("""
+        Lists orders, newest first, with the filter that was applied stated back.
+        Call it with no arguments to see everything, or narrow by customer or by
+        status code. Use it when the user has no order number in hand, or asks
+        what exists.
+
+        Status must be given as a single code — N, H, P, S or X. Do not translate
+        a phrase like "open orders" into codes yourself: the system disagrees with
+        itself about which codes count as open, so ask the user which they mean.
+
+        Rows whose customer was deleted or never existed carry a DataWarning.
+        Repeat it; those rows look ordinary otherwise.
+        """)]
+    public async Task<OrderList> ListOrdersAsync(
+        [Description("Restrict to one customer account id, for example 100.")]
+        int? customerId = null,
+        [Description("Restrict to one status code: N, H, P, S or X.")]
+        string? status = null)
+    {
+        if (status is not null && !StatusMeanings.ContainsKey(status.ToUpperInvariant()))
+        {
+            throw new ArgumentException(
+                $"'{status}' is not an order status code. Valid codes are N (new/open), "
+                + "H (on hold), P (posted), S (shipped) and X (cancelled). Words like "
+                + "'open' or 'active' are ambiguous in this system — the credit trigger "
+                + "counts N and H as live, SP_GET_CUST_EXPO also counts X — so ask which "
+                + "codes are meant instead of choosing one.",
+                nameof(status));
+        }
+
+        var code = status?.ToUpperInvariant();
+
+        await using var db = new SqlConnection(connectionString);
+
+        // LEFT JOIN for the same reason as elsewhere: orders outlive their
+        // customers here, and there is no foreign key to object.
+        var rows = await db.QueryAsync<OrderRow>(
+            """
+            SELECT h.ORD_HDR_ID   AS OrderId,
+                   h.STS_FLG      AS Status,
+                   h.HLD_RSN_CD   AS HoldReason,
+                   h.CUST_ACCT_ID AS CustomerId,
+                   c.PARTY_NAME   AS CustomerName,
+                   c.STS_FLG      AS CustomerStatus,
+                   h.ORD_TOT_AMT  AS OrderTotal,
+                   h.ORD_DT       AS OrderDate
+              FROM dbo.OE_ORD_HDR h
+              LEFT JOIN dbo.AR_CUST_ACCT c ON c.CUST_ACCT_ID = h.CUST_ACCT_ID
+             WHERE (@customerId IS NULL OR h.CUST_ACCT_ID = @customerId)
+               AND (@code       IS NULL OR h.STS_FLG      = @code)
+             ORDER BY h.ORD_HDR_ID;
+            """,
+            new { customerId, code });
+
+        var orders = rows.Select(r => new OrderSummary
+        {
+            OrderId = r.OrderId,
+            Status = r.Status,
+            StatusMeaning = StatusMeanings.GetValueOrDefault(r.Status, "unknown code"),
+            HoldReason = r.HoldReason,
+            CustomerId = r.CustomerId,
+            CustomerName = r.CustomerName,
+            OrderTotal = r.OrderTotal,
+            OrderDate = r.OrderDate,
+            DataWarning = DescribeCustomerProblem(r)
+        }).ToArray();
+
+        return new OrderList
+        {
+            Orders = orders,
+            Count = orders.Length,
+            FilterApplied = (customerId, code) switch
+            {
+                (null, null) => "all orders",
+                (int id, null) => $"customer {id}",
+                (null, string s) => $"status {s}",
+                (int id, string s) => $"customer {id}, status {s}"
+            },
+            StatusNote = StatusNote,
+            CountsByStatus = orders
+                .GroupBy(o => o.Status)
+                .ToDictionary(g => g.Key, g => g.Count())
+        };
+    }
+
+    /// <summary>
+    /// Written for the person who ends up reading it. The model is told to relay
+    /// these notes, so any jargon in them reaches a clerk who does not write SQL:
+    /// "soft delete" and "foreign key" are facts about the implementation, not
+    /// about the customer's situation, and saying them explains nothing to the
+    /// only person who can act.
+    /// </summary>
+    private static string? DescribeCustomerProblem(OrderRow row) => row switch
+    {
+        { CustomerName: null } =>
+            $"The customer account {row.CustomerId} this order belongs to is gone from "
+            + "the system — the record was removed outright, most likely in the 2011 "
+            + "migration, and nothing stopped it. There is no way to tell who the "
+            + "customer was from this order alone.",
+        { CustomerStatus: "X" } =>
+            $"The customer account {row.CustomerId} ({row.CustomerName}) is marked as "
+            + $"closed, yet this order is still in status {row.Status}. Closing an "
+            + "account does not touch its orders in this system, so neither row is "
+            + "wrong on its own — but somebody has to decide which one is out of date.",
+        _ => null
+    };
+
+    private sealed record OrderRow
+    {
+        public required int OrderId { get; init; }
+        public required string Status { get; init; }
+        public string? HoldReason { get; init; }
+        public required int CustomerId { get; init; }
+        public string? CustomerName { get; init; }
+        public string? CustomerStatus { get; init; }
+        public decimal? OrderTotal { get; init; }
+        public required DateTime OrderDate { get; init; }
+    }
+
     [KernelFunction]
     [Description("""
         Returns what a sales order is and what state it is in: status code and
