@@ -20,20 +20,42 @@ across three places:
 | Piece | Object | What it knows |
 |---|---|---|
 | Valid status codes | `CK_OE_HDR_STS` (CHECK) | `'H'` is a legal status. Nothing more. |
-| Who goes ON hold | `TRG_OE_ORD_HDR_AI` (trigger) | Credit check at insert: exposure (statuses `N`,`H`) vs `CR_LMT_AMT` |
-| Who comes OFF hold | `SP_REL_ORD_HLD` (proc) | The release rules, including the **undocumented 110% tolerance** ("agreed verbally with the CFO in 2015") |
+| Who goes ON hold | `TRG_OE_ORD_HDR_AI` (trigger) | Credit check at insert: exposure (statuses `N`,`H`) vs `CR_LMT_AMT`, **no tolerance** |
+| Who comes OFF hold | `SP_REL_ORD_HLD` (proc) | The release rules, including the **10% tolerance** ("agreed verbally with the CFO in 2015") |
 
-**The rows:** customer 100 (Rossi Impianti, limit **5,000**) has open orders
-1030 (2,582.50) + 1042 (2,600.00) = **5,182.50 exposure** → the trigger held
-1042 with reason `CR`.
+**The rows:** customer 100 (Rossi Impianti, limit **5,000**). Order 1030
+arrived in March (2,582.50) — under the limit, no hold. Order 1042 arrived in
+April (2,600.00), taking exposure to **5,182.50**, and the trigger held it on
+the spot with reason `CR`. The order was *born* blocked; nobody decided
+anything. Note also that the trigger only holds the row it just inserted —
+1030 stays `N` even though it accounts for half the overage. Last one in pays.
 
-**The expert answer:** "Rossi is over the 5,000 limit. And before you ask —
-releasing it won't work either, see Q1b."
+**The two thresholds are deliberate, and sane.** The system stops on its own
+above 100% of the limit; a human may override up to 110%; past 110% nobody
+can. Automatic flag, human judgement, hard ceiling — a four-eyes control of
+the kind a CFO actually asks for. Rossi's 5,182.50 sits comfortably inside
+that override band, so releasing 1042 should be a formality.
 
-**Q1b — "OK, so release it, the CFO tolerates 10% over."** `SP_REL_ORD_HLD`
-refuses. Why? Its exposure check uses `SP_GET_CUST_EXPO`, which **also counts
-order 1051 — an order everyone believes is cancelled** (status `X`, 2,228.00),
-bringing exposure to 7,410.50 > 5,500 (110% of limit). See Q3.
+**Q1b — "Fine, override it then."** `SP_REL_ORD_HLD` refuses:
+
+```
+SP_REL_ORD_HLD: credit release refused, exposure exceeds 110% of limit.
+```
+
+Its check runs on `SP_GET_CUST_EXPO`, which **also counts order 1051 — an
+order everyone believes is cancelled** (status `X`, 2,228.00). Exposure
+becomes 7,410.50, past the 5,500 ceiling. See Q3.
+
+**The real defect is not the asymmetry — it is the mismatch.** The two halves
+of one credit control measure two different things: the hold looks at
+5,182.50, the override looks at 7,410.50. The 10% tolerance was calibrated
+against the first number and is applied to the second. Management's escape
+hatch is unusable, and nothing in the schema says so.
+
+The clerk sees none of this. The screen says *order 1042 — on hold — reason
+CR*, and the error message claims an exposure that contradicts the figures in
+front of them. That is where the office legend comes from: "if release fails,
+call IT, they have a script."
 
 **Audit note:** there is **no audit row** for the 1042 hold. The trigger
 predates `FND_AUDIT_TRL` and never writes it. Absence of audit proves nothing

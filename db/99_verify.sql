@@ -25,17 +25,28 @@ IF @expoTrig > @lmt
     PRINT 'PASS  1b: trigger-style exposure ' + CAST(@expoTrig AS VARCHAR) + ' exceeds limit ' + CAST(@lmt AS VARCHAR);
 ELSE PRINT 'FAIL  1b: exposure does not exceed limit, hold would be unjustified';
 
--- 1c. SP_REL_ORD_HLD refuses the release (110% rule + X-counting exposure)
+-- 1c. The hold threshold (100%) and the release threshold (110%) differ by
+--     design: the system flags on its own, a human may override up to the
+--     ceiling. Order 1042 sits inside that override band, so its release
+--     should be a formality — which is what makes 1d interesting.
+IF @expoTrig > @lmt AND @expoTrig <= @lmt * 1.10
+    PRINT 'PASS  1c: trigger-style exposure ' + CAST(@expoTrig AS VARCHAR)
+        + ' sits in the override band (held above ' + CAST(@lmt AS VARCHAR)
+        + ', releasable up to ' + CAST(@lmt * 1.10 AS VARCHAR) + ')';
+ELSE PRINT 'FAIL  1c: expected exposure between 100% and 110% of the credit limit';
+
+-- 1d. SP_REL_ORD_HLD refuses the release anyway: it applies the 110% ceiling
+--     to a different exposure figure (X-counting) than the one the hold used
 BEGIN TRY
     EXEC dbo.SP_REL_ORD_HLD @ORD_HDR_ID = 1042, @USR_NM = 'VERIFY';
-    PRINT 'FAIL  1c: release was accepted, expected a refusal';
+    PRINT 'FAIL  1d: release was accepted, expected a refusal';
 END TRY
 BEGIN CATCH
-    PRINT 'PASS  1c: release refused -> ' + ERROR_MESSAGE();
+    PRINT 'PASS  1d: release refused -> ' + ERROR_MESSAGE();
 END CATCH;
 
 PRINT '';
-PRINT '=== Exhibit 3 (drives 1c): the two schools of status X disagree ===';
+PRINT '=== Exhibit 3 (drives 1d): the two schools of status X disagree ===';
 
 DECLARE @expoProc NUMERIC(15,2);
 EXEC dbo.SP_GET_CUST_EXPO @CUST_ACCT_ID = 100, @EXPO_AMT = @expoProc OUTPUT;
