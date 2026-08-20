@@ -50,6 +50,8 @@ var user = new ErpUser(
     configuration["ERPAGENT_USER"] ?? "DEMO",
     configuration["ERPAGENT_ROLE"] ?? "sales");
 
+var traceEnabled = configuration["ERPAGENT_TRACE"] == "1";
+
 var builder = Kernel.CreateBuilder();
 
 // DeepSeek speaks the OpenAI wire protocol, so the OpenAI connector works
@@ -60,7 +62,7 @@ builder.AddOpenAIChatCompletion(
     endpoint: new Uri("https://api.deepseek.com/v1"),
     apiKey: apiKey);
 
-builder.Services.AddSingleton<IFunctionInvocationFilter>(new ConsoleAuditFilter());
+builder.Services.AddSingleton<IFunctionInvocationFilter>(new ConsoleAuditFilter(traceEnabled));
 builder.Services.AddSingleton<IFunctionInvocationFilter>(
     new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy));
 
@@ -74,7 +76,6 @@ var settings = new OpenAIPromptExecutionSettings
 };
 
 var history = new ChatHistory(SystemPrompt);
-var traceEnabled = configuration["ERPAGENT_TRACE"] == "1";
 
 Console.WriteLine("ERPPRD01 assistant. Ask about an order. Empty line to quit.");
 if (!traceEnabled) Console.WriteLine("Set ERPAGENT_TRACE=1 to see the conversation the kernel builds.");
@@ -127,8 +128,14 @@ static void WriteConversationTrace(ChatHistory history, int before, int afterCal
 /// Prints every tool call as it happens. The console stand-in for the audit
 /// panel: the point of the demo is not that the answer is right, it is that you
 /// can see what the agent did to get there.
+///
+/// Which is why the result is summarised rather than dumped. A tool returns
+/// everything that bears on the decision because the model reads all of it; a
+/// person watching the screen does not, and thirty rows of JSON hide the call
+/// they were meant to reveal. Same data, opposite audience, opposite treatment.
+/// The full payload is one environment variable away.
 /// </summary>
-internal sealed class ConsoleAuditFilter : IFunctionInvocationFilter
+internal sealed class ConsoleAuditFilter(bool verbose) : IFunctionInvocationFilter
 {
     public async Task OnFunctionInvocationAsync(
         FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
@@ -141,8 +148,34 @@ internal sealed class ConsoleAuditFilter : IFunctionInvocationFilter
 
         await next(context);
 
-        var result = context.Result.GetValue<object>();
-        Console.WriteLine($"  [tool] -> {JsonSerializer.Serialize(result)}");
+        var json = JsonSerializer.Serialize(context.Result.GetValue<object>());
+        Console.WriteLine($"  [tool] -> {(verbose ? json : Summarise(json))}");
         Console.ResetColor();
     }
+
+    /// <summary>
+    /// One line per result: scalars as they are, long strings clipped, arrays as
+    /// a count. Deliberately generic — it reads the serialised shape rather than
+    /// the tool types, so a new tool needs no change here.
+    /// </summary>
+    private static string Summarise(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind is not JsonValueKind.Object) return Clip(json, 120);
+
+        var fields = document.RootElement.EnumerateObject().Select(p => p.Value.ValueKind switch
+        {
+            JsonValueKind.Array => $"{p.Name}=[{p.Value.GetArrayLength()} items]",
+            JsonValueKind.Object => $"{p.Name}={{{string.Join(" ",
+                p.Value.EnumerateObject().Select(i => $"{i.Name}={i.Value}"))}}}",
+            JsonValueKind.String => $"{p.Name}=\"{Clip(p.Value.GetString() ?? "", 60)}\"",
+            JsonValueKind.Null => $"{p.Name}=null",
+            _ => $"{p.Name}={p.Value}"
+        });
+
+        return string.Join(", ", fields);
+    }
+
+    private static string Clip(string text, int limit) =>
+        text.Length <= limit ? text : string.Concat(text.AsSpan(0, limit), "…");
 }
