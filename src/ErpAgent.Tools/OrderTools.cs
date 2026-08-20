@@ -370,6 +370,133 @@ public sealed class OrderTools(string connectionString, ErpUser user)
         };
     }
 
+    [KernelFunction]
+    [Description("""
+        Cancels an order through SP_CANC_ORD and reports what that did.
+
+        Use it when the user asks to cancel, void, remove or DELETE an order.
+        There is no tool that deletes, and asking for one changes nothing: in
+        this system cancelling means the order is marked cancelled and kept, the
+        stock it had reserved is handed back to the warehouse, and the action is
+        written to the audit trail. Say so — a user who asked for a deletion and
+        is told "done" will believe the record is gone.
+
+        Report the released quantities. They are the part a deletion would have
+        got wrong, and they change what can be promised to other customers.
+
+        A refusal is a normal result: only orders that are open or on hold can be
+        cancelled. Report it; do not look for another way.
+        """)]
+    public async Task<CancellationOutcome> CancelOrderAsync(
+        [Description("The order header id, for example 1058.")] int orderId)
+    {
+        await using var db = new SqlConnection(connectionString);
+
+        // Commitments are read before and after so the outcome reports what the
+        // procedure actually released, not what the order lines suggest it
+        // should have. Two of 1058's three lines carry no stock at all.
+        var before = await ReadCommitmentsAsync(db, orderId);
+
+        var lines = await db.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM dbo.OE_ORD_LINE WHERE ORD_HDR_ID = @orderId;",
+            new { orderId });
+
+        try
+        {
+            await db.ExecuteAsync("dbo.SP_CANC_ORD",
+                new { ORD_HDR_ID = orderId, USR_NM = user.Name },
+                commandType: CommandType.StoredProcedure);
+        }
+        catch (SqlException refusal)
+        {
+            return new CancellationOutcome
+            {
+                OrderId = orderId,
+                Cancelled = false,
+                RefusedBecause = refusal.Message,
+                WhatWasDone = "Nothing. The order is unchanged.",
+                ActedAs = user.Name,
+                Audited = null,
+                AuditNote = "Nothing was changed, so there is nothing to audit. "
+                            + "Do not report this as an untracked change."
+            };
+        }
+
+        var after = await ReadCommitmentsAsync(db, orderId);
+
+        var released = before
+            .Select(b => new
+            {
+                b.Key.ItemCode,
+                b.Key.WarehouseCode,
+                Quantity = b.Value - after.GetValueOrDefault(b.Key)
+            })
+            .Where(r => r.Quantity > 0)
+            .Select(r => new ReleasedStock
+            {
+                ItemCode = r.ItemCode,
+                WarehouseCode = r.WarehouseCode,
+                Quantity = r.Quantity
+            })
+            .ToArray();
+
+        var audited = await db.ExecuteScalarAsync<int>(
+            """
+            SELECT COUNT(*) FROM dbo.FND_AUDIT_TRL
+             WHERE OBJ_NM = 'OE_ORD_HDR' AND OBJ_ID = @orderId
+               AND ACTN_CD = 'CANC' AND ACTN_BY = @actedAs;
+            """,
+            new { orderId, actedAs = user.Name });
+
+        return new CancellationOutcome
+        {
+            OrderId = orderId,
+            Cancelled = true,
+            WhatWasDone =
+                $"Order {orderId} and its {lines} lines are marked cancelled. The rows "
+                + "still exist and always will — nothing in this system is deleted — so "
+                + "the order remains visible in listings and reports with status X.",
+            LinesCancelled = lines,
+            StockReleased = released,
+            ActedAs = user.Name,
+            Audited = audited > 0,
+            AuditNote = audited > 0
+                ? $"Recorded in FND_AUDIT_TRL as CANC by {user.Name}."
+                : "The order was cancelled but no audit row was written. Report this: "
+                  + "it is not normal for this procedure."
+        };
+    }
+
+    /// <summary>
+    /// How much stock is committed, per item and warehouse, for the items on one
+    /// order. Taken twice around the cancellation so the difference is measured
+    /// rather than inferred.
+    /// </summary>
+    private static async Task<Dictionary<(string ItemCode, string WarehouseCode), decimal>>
+        ReadCommitmentsAsync(SqlConnection db, int orderId)
+    {
+        var rows = await db.QueryAsync<CommitmentRow>(
+            """
+            SELECT DISTINCT im.ITEM_CD AS ItemCode,
+                            oh.WHSE_CD AS WarehouseCode,
+                            oh.QTY_COMM AS Committed
+              FROM dbo.OE_ORD_LINE l
+              JOIN dbo.INV_ITEM_MST   im ON im.ITEM_ID = l.ITEM_ID
+              JOIN dbo.INV_ONHAND_QTY oh ON oh.ITEM_ID = l.ITEM_ID
+             WHERE l.ORD_HDR_ID = @orderId;
+            """,
+            new { orderId });
+
+        return rows.ToDictionary(r => (r.ItemCode, r.WarehouseCode), r => r.Committed);
+    }
+
+    private sealed record CommitmentRow
+    {
+        public required string ItemCode { get; init; }
+        public required string WarehouseCode { get; init; }
+        public required decimal Committed { get; init; }
+    }
+
     /// <summary>
     /// The release rules, as SP_REL_ORD_HLD applies them — reproduced here
     /// read-only so the tool can answer "why not" instead of merely failing.

@@ -18,11 +18,17 @@ public sealed class RoleAuthorizationFilter(
     /// <summary>
     /// The whole write policy, in one readable place. Anything absent is open;
     /// every entry here is a tool that changes the database.
+    ///
+    /// Note that neither role contains the other. Order entry cancels orders and
+    /// credit control releases holds, and a table says so directly — a hierarchy
+    /// of permission levels could not express it without inventing a rank that
+    /// the business does not have.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> DefaultPolicy =
         new Dictionary<string, string>
         {
-            ["ReleaseOrderFromHold"] = "credit"
+            ["ReleaseOrderFromHold"] = "credit",
+            ["CancelOrder"] = "sales"
         };
 
     public async Task OnFunctionInvocationAsync(
