@@ -1,4 +1,16 @@
+# Private working notes — never commit (see CLAUDE.local.md)
+CLAUDE.local.md
+*.local.md
+
+# Secrets
+.env
+.env.*
+*.pfx
+
+# macOS
 .DS_Store
-*.user
+
+# .NET
 bin/
 obj/
+*.user
