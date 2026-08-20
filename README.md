@@ -200,6 +200,12 @@ RAG-informed agent and the curated-tool agent, measuring where each breaks. A
 web front end with a live audit panel — the point being not that the answer is
 right, but that you can see what the agent did to get there.
 
+## Method
+
+Built with AI-assisted development — the same practice I introduced into my
+team's pipeline at work. The design decisions, the constraints and the
+trade-offs documented here are the point; the typing is not.
+
 ## License
 
 MIT
