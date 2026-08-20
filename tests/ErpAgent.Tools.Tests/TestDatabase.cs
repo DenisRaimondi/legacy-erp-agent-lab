@@ -14,6 +14,8 @@ internal static class TestDatabase
 
     public static OrderTools Tools() => ToolsFor("VERIFY", "credit");
 
+    public static InventoryTools Inventory() => new(ConnectionString);
+
     public static OrderTools ToolsFor(string userName, string role) =>
         new(ConnectionString, new ErpUser(userName, role));
 }

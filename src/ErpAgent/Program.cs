@@ -68,6 +68,7 @@ builder.Services.AddSingleton<IFunctionInvocationFilter>(
 
 var kernel = builder.Build();
 kernel.Plugins.AddFromObject(new OrderTools(connectionString, user), "Orders");
+kernel.Plugins.AddFromObject(new InventoryTools(connectionString), "Inventory");
 
 var chat = kernel.GetRequiredService<IChatCompletionService>();
 var settings = new OpenAIPromptExecutionSettings
