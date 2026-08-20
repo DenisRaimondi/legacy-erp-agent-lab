@@ -6,7 +6,7 @@ using Microsoft.SemanticKernel;
 
 namespace ErpAgent.Tools;
 
-public sealed class OrderTools(string connectionString)
+public sealed class OrderTools(string connectionString, ErpUser user)
 {
     /// <summary>
     /// The 10% release tolerance, agreed verbally with the CFO in 2015. There is
@@ -159,6 +159,67 @@ public sealed class OrderTools(string connectionString)
             WouldPassWithHoldExposure = ceiling is null || exposureUsedByHoldCheck <= ceiling,
             OrdersCountedOnlyByReleaseCheck = cancelledButCounted.ToArray(),
             SourceObjects = ["TRG_OE_ORD_HDR_AI", "SP_REL_ORD_HLD", "SP_GET_CUST_EXPO"]
+        };
+    }
+
+    [KernelFunction]
+    [Description("""
+        Releases an order from hold through SP_REL_ORD_HLD, the only sanctioned
+        path, and reports what happened. Use it when the user asks to release,
+        unblock or approve an order.
+
+        A refusal is a normal result, not a failure: it comes back with
+        Released=false and the figures behind it. Report the refusal and what
+        would have to change. Do not look for another way to release the order —
+        there is no other tool, and there is not meant to be: an update that
+        skipped this procedure would skip the credit rules and leave no audit
+        trail.
+
+        The acting user is taken from the session. There is no parameter for it,
+        and you must not ask the user to supply one.
+        """)]
+    public async Task<ReleaseOutcome> ReleaseOrderFromHoldAsync(
+        [Description("The order header id, for example 1042.")] int orderId)
+    {
+        var diagnosis = await CheckReleaseEligibilityAsync(orderId);
+
+        await using var db = new SqlConnection(connectionString);
+
+        try
+        {
+            await db.ExecuteAsync("dbo.SP_REL_ORD_HLD",
+                new { ORD_HDR_ID = orderId, USR_NM = user.Name },
+                commandType: CommandType.StoredProcedure);
+        }
+        catch (SqlException refusal)
+        {
+            // The procedure raises before it updates anything, so the order is
+            // untouched. Surface the reason it gave rather than a stack trace.
+            return new ReleaseOutcome
+            {
+                OrderId = orderId,
+                Released = false,
+                RefusedBecause = refusal.Message,
+                Diagnosis = diagnosis,
+                ActedAs = user.Name,
+                Audited = false
+            };
+        }
+
+        var audited = await db.ExecuteScalarAsync<int>(
+            """
+            SELECT COUNT(*) FROM dbo.FND_AUDIT_TRL
+             WHERE OBJ_NM = 'OE_ORD_HDR' AND OBJ_ID = @orderId
+               AND ACTN_CD = 'REL_HLD' AND ACTN_BY = @actedAs;
+            """,
+            new { orderId, actedAs = user.Name });
+
+        return new ReleaseOutcome
+        {
+            OrderId = orderId,
+            Released = true,
+            ActedAs = user.Name,
+            Audited = audited > 0
         };
     }
 

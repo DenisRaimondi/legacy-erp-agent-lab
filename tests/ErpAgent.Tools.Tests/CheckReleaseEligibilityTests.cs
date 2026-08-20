@@ -12,7 +12,7 @@ public class CheckReleaseEligibilityTests
     [Fact]
     public async Task Order_1042_cannot_be_released()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var check = await tools.CheckReleaseEligibilityAsync(1042);
 
@@ -28,7 +28,7 @@ public class CheckReleaseEligibilityTests
     [Fact]
     public async Task Reports_both_thresholds_and_both_exposures()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var check = await tools.CheckReleaseEligibilityAsync(1042);
 
@@ -46,7 +46,7 @@ public class CheckReleaseEligibilityTests
     [Fact]
     public async Task Names_the_cancelled_order_that_keeps_1042_blocked()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var check = await tools.CheckReleaseEligibilityAsync(1042);
 
@@ -60,7 +60,7 @@ public class CheckReleaseEligibilityTests
     [Fact]
     public async Task Reports_a_missing_order_as_absent_and_says_gaps_are_normal()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var error = await Assert.ThrowsAsync<OrderNotFoundException>(
             () => tools.CheckReleaseEligibilityAsync(1041));

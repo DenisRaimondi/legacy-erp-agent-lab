@@ -38,6 +38,14 @@ var connectionString =
     ?? "Server=localhost,1433;Database=ERPPRD01;User Id=sa;Password=LegacyLab!2026;"
        + "TrustServerCertificate=True;Encrypt=False";
 
+// Identity comes from the host, standing in for whatever a real deployment
+// would authenticate against. It is never a tool parameter: a name the model
+// can choose is a name the model can invent, and it is what lands in the audit
+// trail.
+var user = new ErpUser(
+    configuration["ERPAGENT_USER"] ?? "DEMO",
+    configuration["ERPAGENT_ROLE"] ?? "sales");
+
 var builder = Kernel.CreateBuilder();
 
 // DeepSeek speaks the OpenAI wire protocol, so the OpenAI connector works
@@ -49,9 +57,11 @@ builder.AddOpenAIChatCompletion(
     apiKey: apiKey);
 
 builder.Services.AddSingleton<IFunctionInvocationFilter>(new ConsoleAuditFilter());
+builder.Services.AddSingleton<IFunctionInvocationFilter>(
+    new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy));
 
 var kernel = builder.Build();
-kernel.Plugins.AddFromObject(new OrderTools(connectionString), "Orders");
+kernel.Plugins.AddFromObject(new OrderTools(connectionString, user), "Orders");
 
 var chat = kernel.GetRequiredService<IChatCompletionService>();
 var settings = new OpenAIPromptExecutionSettings

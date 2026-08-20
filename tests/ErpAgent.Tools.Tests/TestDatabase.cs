@@ -11,4 +11,9 @@ internal static class TestDatabase
         Environment.GetEnvironmentVariable("ERPPRD01_CONNECTION")
         ?? "Server=localhost,1433;Database=ERPPRD01;User Id=sa;Password=LegacyLab!2026;"
            + "TrustServerCertificate=True;Encrypt=False";
+
+    public static OrderTools Tools() => ToolsFor("VERIFY", "credit");
+
+    public static OrderTools ToolsFor(string userName, string role) =>
+        new(ConnectionString, new ErpUser(userName, role));
 }

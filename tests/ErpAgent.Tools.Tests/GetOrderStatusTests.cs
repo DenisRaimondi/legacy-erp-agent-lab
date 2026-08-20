@@ -7,7 +7,7 @@ public class GetOrderStatusTests
     [Fact]
     public async Task Reports_order_1042_as_held_for_credit()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var status = await tools.GetOrderStatusAsync(1042);
 
@@ -27,7 +27,7 @@ public class GetOrderStatusTests
     [Fact]
     public async Task Explains_why_the_1042_hold_left_no_audit_trail()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var status = await tools.GetOrderStatusAsync(1042);
 
@@ -43,7 +43,7 @@ public class GetOrderStatusTests
     [Fact]
     public async Task Returns_the_cancellation_audit_row_of_order_1051()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var status = await tools.GetOrderStatusAsync(1051);
 
@@ -62,7 +62,7 @@ public class GetOrderStatusTests
     [Fact]
     public async Task Reports_a_missing_order_as_absent_and_says_gaps_are_normal()
     {
-        var tools = new OrderTools(TestDatabase.ConnectionString);
+        var tools = TestDatabase.Tools();
 
         var error = await Assert.ThrowsAsync<OrderNotFoundException>(
             () => tools.GetOrderStatusAsync(1041));
