@@ -60,8 +60,10 @@ var settings = new OpenAIPromptExecutionSettings
 };
 
 var history = new ChatHistory(SystemPrompt);
+var traceEnabled = configuration["ERPAGENT_TRACE"] == "1";
 
 Console.WriteLine("ERPPRD01 assistant. Ask about an order. Empty line to quit.");
+if (!traceEnabled) Console.WriteLine("Set ERPAGENT_TRACE=1 to see the conversation the kernel builds.");
 Console.WriteLine();
 
 while (true)
@@ -71,11 +73,39 @@ while (true)
     if (string.IsNullOrWhiteSpace(question)) break;
 
     history.AddUserMessage(question);
+
+    var depthBefore = history.Count;
     var answer = await chat.GetChatMessageContentAsync(history, settings, kernel);
+    var depthAfterCall = history.Count;
+
     history.Add(answer);
 
     Console.WriteLine();
     Console.WriteLine(answer.Content);
+    Console.WriteLine();
+
+    if (traceEnabled) WriteConversationTrace(history, depthBefore, depthAfterCall);
+}
+
+// The kernel appends the tool traffic to the history it was handed: one
+// assistant message carrying the call requests, then one message per result.
+// Printing the roles makes that visible, which is the whole point of the demo —
+// the loop happens inside a single await and is otherwise invisible.
+static void WriteConversationTrace(ChatHistory history, int before, int afterCall)
+{
+    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.WriteLine($"  history: {before} messages before the call, {afterCall} after "
+                      + $"— {afterCall - before} appended by the kernel");
+
+    foreach (var message in history)
+    {
+        var preview = message.Content is { Length: > 0 } text
+            ? text.ReplaceLineEndings(" ")[..Math.Min(60, text.Length)]
+            : $"[{message.Items.Count} non-text blocks]";
+        Console.WriteLine($"    {message.Role,-9} {preview}");
+    }
+
+    Console.ResetColor();
     Console.WriteLine();
 }
 
