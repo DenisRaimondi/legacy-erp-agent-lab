@@ -30,12 +30,31 @@ var configuration = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var apiKey = configuration["DeepSeek:ApiKey"]
-    ?? configuration["DEEPSEEK_API_KEY"]
-    ?? throw new InvalidOperationException(
-        "No DeepSeek API key. Set it with:\n"
-        + "  dotnet user-secrets set \"DeepSeek:ApiKey\" \"<key>\" --project src/ErpAgent\n"
-        + "or export DEEPSEEK_API_KEY in the environment.");
+// Provider selection: Azure OpenAI when configured, DeepSeek otherwise. The
+// agent does not care which model answers - the tools, the role filter and the
+// audit trail are identical either way. That is the point of the trust layer:
+// swapping the model must not change what the agent is allowed to do.
+var azureEndpoint = configuration["AzureOpenAI:Endpoint"]
+    ?? configuration["AZURE_OPENAI_ENDPOINT"];
+var azureApiKey = configuration["AzureOpenAI:ApiKey"]
+    ?? configuration["AZURE_OPENAI_API_KEY"];
+var azureDeployment = configuration["AzureOpenAI:Deployment"]
+    ?? configuration["AZURE_OPENAI_DEPLOYMENT"]
+    ?? "gpt-5-mini";
+
+var useAzure = !string.IsNullOrWhiteSpace(azureEndpoint)
+    && !string.IsNullOrWhiteSpace(azureApiKey);
+
+var apiKey = useAzure
+    ? null
+    : configuration["DeepSeek:ApiKey"]
+        ?? configuration["DEEPSEEK_API_KEY"]
+        ?? throw new InvalidOperationException(
+            "No model provider configured. Set Azure OpenAI:\n"
+            + "  dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"<url>\" --project src/ErpAgent\n"
+            + "  dotnet user-secrets set \"AzureOpenAI:ApiKey\" \"<key>\" --project src/ErpAgent\n"
+            + "or DeepSeek:\n"
+            + "  dotnet user-secrets set \"DeepSeek:ApiKey\" \"<key>\" --project src/ErpAgent");
 
 var connectionString =
     configuration["ERPPRD01_CONNECTION"]
@@ -54,13 +73,26 @@ var traceEnabled = configuration["ERPAGENT_TRACE"] == "1";
 
 var builder = Kernel.CreateBuilder();
 
-// DeepSeek speaks the OpenAI wire protocol, so the OpenAI connector works
-// unchanged against its endpoint. deepseek-chat, not deepseek-reasoner: this
-// agent is nothing without function calling, and the reasoner does not do it.
-builder.AddOpenAIChatCompletion(
-    modelId: "deepseek-chat",
-    endpoint: new Uri("https://api.deepseek.com/v1"),
-    apiKey: apiKey);
+if (useAzure)
+{
+    // On Azure the model is reached through a deployment we create and name
+    // ourselves, so the identifier here is our deployment name - not the name
+    // of the underlying model.
+    builder.AddAzureOpenAIChatCompletion(
+        deploymentName: azureDeployment,
+        endpoint: azureEndpoint!,
+        apiKey: azureApiKey!);
+}
+else
+{
+    // DeepSeek speaks the OpenAI wire protocol, so the OpenAI connector works
+    // unchanged against its endpoint. deepseek-chat, not deepseek-reasoner: this
+    // agent is nothing without function calling, and the reasoner does not do it.
+    builder.AddOpenAIChatCompletion(
+        modelId: "deepseek-chat",
+        endpoint: new Uri("https://api.deepseek.com/v1"),
+        apiKey: apiKey!);
+}
 
 builder.Services.AddSingleton<IFunctionInvocationFilter>(new ConsoleAuditFilter(traceEnabled));
 builder.Services.AddSingleton<IFunctionInvocationFilter>(
