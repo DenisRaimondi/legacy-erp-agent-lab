@@ -8,8 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.79" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
-    <PackageReference Include="Microsoft.SemanticKernel.Abstractions" Version="1.80.0" />
   </ItemGroup>
 
 </Project>

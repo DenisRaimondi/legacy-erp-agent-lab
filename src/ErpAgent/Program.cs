@@ -1,10 +1,12 @@
+using System.ClientModel;
+using Azure.AI.OpenAI;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using OpenAI;
 using System.Text.Json;
 using ErpAgent.Tools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 const string SystemPrompt = """
     You answer questions about an ERP system by calling the tools you are given.
@@ -71,47 +73,54 @@ var user = new ErpUser(
 
 var traceEnabled = configuration["ERPAGENT_TRACE"] == "1";
 
-var builder = Kernel.CreateBuilder();
-
-if (useAzure)
-{
-    // On Azure the model is reached through a deployment we create and name
-    // ourselves, so the identifier here is our deployment name - not the name
-    // of the underlying model.
-    builder.AddAzureOpenAIChatCompletion(
-        deploymentName: azureDeployment,
-        endpoint: azureEndpoint!,
-        apiKey: azureApiKey!);
-}
-else
-{
-    // DeepSeek speaks the OpenAI wire protocol, so the OpenAI connector works
+// One IChatClient, whichever provider is configured. Everything downstream —
+// tools, middleware, the loop — is written against the abstraction and never
+// learns which service answered.
+IChatClient chatClient = useAzure
+    ? new AzureOpenAIClient(new Uri(azureEndpoint!), new ApiKeyCredential(azureApiKey!))
+        .GetChatClient(azureDeployment)
+        .AsIChatClient()
+    // DeepSeek speaks the OpenAI wire protocol, so the OpenAI client works
     // unchanged against its endpoint. deepseek-chat, not deepseek-reasoner: this
     // agent is nothing without function calling, and the reasoner does not do it.
-    builder.AddOpenAIChatCompletion(
-        modelId: "deepseek-chat",
-        endpoint: new Uri("https://api.deepseek.com/v1"),
-        apiKey: apiKey!);
-}
+    : new OpenAIClient(new ApiKeyCredential(apiKey!),
+            new OpenAIClientOptions { Endpoint = new Uri("https://api.deepseek.com/v1") })
+        .GetChatClient("deepseek-chat")
+        .AsIChatClient();
 
-builder.Services.AddSingleton<IFunctionInvocationFilter>(new ConsoleAuditFilter(traceEnabled));
-builder.Services.AddSingleton<IFunctionInvocationFilter>(
-    new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy));
+var orderTools = new OrderTools(connectionString, user);
+var inventoryTools = new InventoryTools(connectionString);
 
-var kernel = builder.Build();
-kernel.Plugins.AddFromObject(new OrderTools(connectionString, user), "Orders");
-kernel.Plugins.AddFromObject(new InventoryTools(connectionString), "Inventory");
+// The registered name is stated explicitly rather than inferred from the method
+// name. The authorization policy is keyed on these strings, and a policy that
+// silently stops matching is a policy that silently stops enforcing.
+AITool[] tools =
+[
+    AIFunctionFactory.Create(orderTools.ListOrdersAsync, name: "ListOrders"),
+    AIFunctionFactory.Create(orderTools.GetOrderStatusAsync, name: "GetOrderStatus"),
+    AIFunctionFactory.Create(orderTools.CheckReleaseEligibilityAsync, name: "CheckReleaseEligibility"),
+    AIFunctionFactory.Create(orderTools.ReleaseOrderFromHoldAsync, name: "ReleaseOrderFromHold"),
+    AIFunctionFactory.Create(orderTools.CancelOrderAsync, name: "CancelOrder"),
+    AIFunctionFactory.Create(inventoryTools.GetItemAvailabilityAsync, name: "GetItemAvailability"),
+];
 
-var chat = kernel.GetRequiredService<IChatCompletionService>();
-var settings = new OpenAIPromptExecutionSettings
-{
-    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
-};
+var audit = new ConsoleAuditMiddleware(traceEnabled);
+var authorization = new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy);
 
-var history = new ChatHistory(SystemPrompt);
+// Order matters: audit wraps authorization, so a refused call is still recorded.
+// The reverse order would make refusals invisible — the one event you most want
+// in the trail is the one that never ran.
+AIAgent agent = chatClient
+    .AsAIAgent(instructions: SystemPrompt, tools: tools)
+    .AsBuilder()
+        .Use(audit.InvokeAsync)
+        .Use(authorization.InvokeAsync)
+    .Build();
+
+AgentSession session = await agent.CreateSessionAsync();
 
 Console.WriteLine("ERPPRD01 assistant. Ask about an order. Empty line to quit.");
-if (!traceEnabled) Console.WriteLine("Set ERPAGENT_TRACE=1 to see the conversation the kernel builds.");
+if (!traceEnabled) Console.WriteLine("Set ERPAGENT_TRACE=1 to see the messages the agent builds.");
 Console.WriteLine();
 
 while (true)
@@ -120,36 +129,30 @@ while (true)
     var question = Console.ReadLine();
     if (string.IsNullOrWhiteSpace(question)) break;
 
-    history.AddUserMessage(question);
-
-    var depthBefore = history.Count;
-    var answer = await chat.GetChatMessageContentAsync(history, settings, kernel);
-    var depthAfterCall = history.Count;
-
-    history.Add(answer);
+    AgentResponse response = await agent.RunAsync(question, session);
 
     Console.WriteLine();
-    Console.WriteLine(answer.Content);
+    Console.WriteLine(response.Text);
     Console.WriteLine();
 
-    if (traceEnabled) WriteConversationTrace(history, depthBefore, depthAfterCall);
+    if (traceEnabled) WriteConversationTrace(response);
 }
 
-// The kernel appends the tool traffic to the history it was handed: one
-// assistant message carrying the call requests, then one message per result.
-// Printing the roles makes that visible, which is the whole point of the demo —
-// the loop happens inside a single await and is otherwise invisible.
-static void WriteConversationTrace(ChatHistory history, int before, int afterCall)
+// A single RunAsync hides a loop: the model asks for tools, the framework runs
+// them, the results go back, and only then does the answer arrive. Printing the
+// messages the run produced makes that visible — the whole point of the demo is
+// that the loop is otherwise invisible.
+static void WriteConversationTrace(AgentResponse response)
 {
     Console.ForegroundColor = ConsoleColor.DarkGray;
-    Console.WriteLine($"  history: {before} messages before the call, {afterCall} after "
-                      + $"— {afterCall - before} appended by the kernel");
+    Console.WriteLine($"  the run produced {response.Messages.Count} messages");
 
-    foreach (var message in history)
+    foreach (var message in response.Messages)
     {
-        var preview = message.Content is { Length: > 0 } text
+        var text = message.Text;
+        var preview = text is { Length: > 0 }
             ? text.ReplaceLineEndings(" ")[..Math.Min(60, text.Length)]
-            : $"[{message.Items.Count} non-text blocks]";
+            : $"[{message.Contents.Count} non-text blocks]";
         Console.WriteLine($"    {message.Role,-9} {preview}");
     }
 
@@ -168,10 +171,13 @@ static void WriteConversationTrace(ChatHistory history, int before, int afterCal
 /// they were meant to reveal. Same data, opposite audience, opposite treatment.
 /// The full payload is one environment variable away.
 /// </summary>
-internal sealed class ConsoleAuditFilter(bool verbose) : IFunctionInvocationFilter
+internal sealed class ConsoleAuditMiddleware(bool verbose)
 {
-    public async Task OnFunctionInvocationAsync(
-        FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
+    public async ValueTask<object?> InvokeAsync(
+        AIAgent agent,
+        FunctionInvocationContext context,
+        Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
+        CancellationToken cancellationToken)
     {
         var arguments = string.Join(", ",
             context.Arguments.Select(a => $"{a.Key}: {a.Value}"));
@@ -179,11 +185,13 @@ internal sealed class ConsoleAuditFilter(bool verbose) : IFunctionInvocationFilt
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine($"  [tool] {context.Function.Name}({arguments})");
 
-        await next(context);
+        var result = await next(context, cancellationToken);
 
-        var json = JsonSerializer.Serialize(context.Result.GetValue<object>());
+        var json = JsonSerializer.Serialize(result);
         Console.WriteLine($"  [tool] -> {(verbose ? json : Summarise(json))}");
         Console.ResetColor();
+
+        return result;
     }
 
     /// <summary>

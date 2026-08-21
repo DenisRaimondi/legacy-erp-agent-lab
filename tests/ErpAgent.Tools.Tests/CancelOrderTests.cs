@@ -1,5 +1,5 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Xunit;
 
 namespace ErpAgent.Tools.Tests;
@@ -113,16 +113,22 @@ public class CancelOrderTests : IAsyncLifetime
     public async Task Is_closed_to_the_role_that_may_release_holds()
     {
         var user = new ErpUser("MGRECU", "credit");
-        var builder = Kernel.CreateBuilder();
-        builder.Services.AddSingleton<IFunctionInvocationFilter>(
-            new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy));
-        var kernel = builder.Build();
-        kernel.Plugins.AddFromObject(new OrderTools(TestDatabase.ConnectionString, user), "Orders");
+        var orders = new OrderTools(TestDatabase.ConnectionString, user);
+        var middleware = new RoleAuthorizationFilter(user, RoleAuthorizationFilter.DefaultPolicy);
 
-        var result = await kernel.InvokeAsync("Orders", "CancelOrder",
-            new KernelArguments { ["orderId"] = 1058 });
+        var context = new FunctionInvocationContext
+        {
+            Function = AIFunctionFactory.Create(orders.CancelOrderAsync, name: "CancelOrder"),
+            Arguments = new AIFunctionArguments { ["orderId"] = 1058 }
+        };
 
-        Assert.Contains("denied", result.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+        var result = await middleware.InvokeAsync(
+            agent: null!,
+            context,
+            next: static async (ctx, ct) => await ctx.Function.InvokeAsync(ctx.Arguments, ct),
+            CancellationToken.None);
+
+        Assert.Contains("denied", Assert.IsType<string>(result), StringComparison.OrdinalIgnoreCase);
 
         var status = await TestDatabase.Tools().GetOrderStatusAsync(1058);
         Assert.Equal("N", status.Status);
@@ -136,12 +142,21 @@ public class CancelOrderTests : IAsyncLifetime
     [Fact]
     public void Offers_no_tool_that_deletes_anything()
     {
-        var kernel = Kernel.CreateBuilder().Build();
-        kernel.Plugins.AddFromObject(
-            new OrderTools(TestDatabase.ConnectionString, new ErpUser("X", "sales")), "Orders");
-        kernel.Plugins.AddFromObject(new InventoryTools(TestDatabase.ConnectionString), "Inventory");
+        var orders = new OrderTools(TestDatabase.ConnectionString, new ErpUser("X", "sales"));
+        var inventory = new InventoryTools(TestDatabase.ConnectionString);
 
-        Assert.DoesNotContain(kernel.Plugins.SelectMany(p => p),
+        // The surface the model can call, assembled as the host assembles it.
+        AIFunction[] surface =
+        [
+            AIFunctionFactory.Create(orders.ListOrdersAsync, name: "ListOrders"),
+            AIFunctionFactory.Create(orders.GetOrderStatusAsync, name: "GetOrderStatus"),
+            AIFunctionFactory.Create(orders.CheckReleaseEligibilityAsync, name: "CheckReleaseEligibility"),
+            AIFunctionFactory.Create(orders.ReleaseOrderFromHoldAsync, name: "ReleaseOrderFromHold"),
+            AIFunctionFactory.Create(orders.CancelOrderAsync, name: "CancelOrder"),
+            AIFunctionFactory.Create(inventory.GetItemAvailabilityAsync, name: "GetItemAvailability"),
+        ];
+
+        Assert.DoesNotContain(surface,
             f => f.Name.Contains("delete", StringComparison.OrdinalIgnoreCase)
               || f.Name.Contains("remove", StringComparison.OrdinalIgnoreCase)
               || f.Name.Contains("sql", StringComparison.OrdinalIgnoreCase));

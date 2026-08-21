@@ -19,8 +19,8 @@ on-hand minus committed, or that status `'X'` means two different things
 depending on who you ask. That knowledge lives in code and in people's heads.
 
 This repository is both halves: the database, with every quirk hand-crafted onto
-specific rows and verified by script, and a .NET / Semantic Kernel agent that
-operates on it through curated tools rather than generated SQL.
+specific rows and verified by script, and a .NET / Microsoft Agent Framework
+agent that operates on it through curated tools rather than generated SQL.
 
 ## What it does
 

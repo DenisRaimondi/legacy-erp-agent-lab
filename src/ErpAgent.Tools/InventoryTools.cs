@@ -2,8 +2,6 @@ using System.ComponentModel;
 using System.Data;
 using Dapper;
 using Microsoft.Data.SqlClient;
-using Microsoft.SemanticKernel;
-
 namespace ErpAgent.Tools;
 
 public sealed class InventoryTools(string connectionString)
@@ -22,8 +20,6 @@ public sealed class InventoryTools(string connectionString)
             ["TRNS"] = ("goods in transit — bought and moving, not yet on any shelf", false),
             ["QC01"] = ("quarantine, awaiting quality inspection — may never be released", false)
         };
-
-    [KernelFunction]
     [Description("""
         Reports how much of an item can be promised and by when. Use it whenever
         someone asks what is in stock, what is available, or how many they can

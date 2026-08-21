@@ -2,8 +2,6 @@ using System.ComponentModel;
 using System.Data;
 using Dapper;
 using Microsoft.Data.SqlClient;
-using Microsoft.SemanticKernel;
-
 namespace ErpAgent.Tools;
 
 public sealed class OrderTools(string connectionString, ErpUser user)
@@ -45,8 +43,6 @@ public sealed class OrderTools(string connectionString, ErpUser user)
         + "treat it as cancelled and stop counting the order, while "
         + "SP_GET_CUST_EXPO counts it as still live. There is therefore no single "
         + "definition of an 'open' order — say which codes you mean.";
-
-    [KernelFunction]
     [Description("""
         Lists orders, newest first, with the filter that was applied stated back.
         Call it with no arguments to see everything, or narrow by customer or by
@@ -165,8 +161,6 @@ public sealed class OrderTools(string connectionString, ErpUser user)
         public decimal? OrderTotal { get; init; }
         public required DateTime OrderDate { get; init; }
     }
-
-    [KernelFunction]
     [Description("""
         Returns what a sales order is and what state it is in: status code and
         its meaning, hold reason, customer, total, and the order's audit trail.
@@ -216,8 +210,6 @@ public sealed class OrderTools(string connectionString, ErpUser user)
             AuditNote = AuditCaveat
         };
     }
-
-    [KernelFunction]
     [Description("""
         Determines whether an order on hold can be released, and returns every
         figure the decision rests on. Read-only: it decides nothing in the
@@ -302,8 +294,6 @@ public sealed class OrderTools(string connectionString, ErpUser user)
             SourceObjects = ["TRG_OE_ORD_HDR_AI", "SP_REL_ORD_HLD", "SP_GET_CUST_EXPO"]
         };
     }
-
-    [KernelFunction]
     [Description("""
         Releases an order from hold through SP_REL_ORD_HLD, the only sanctioned
         path, and reports what happened. Use it when the user asks to release,
@@ -369,8 +359,6 @@ public sealed class OrderTools(string connectionString, ErpUser user)
                   + "this: it is not normal for this procedure."
         };
     }
-
-    [KernelFunction]
     [Description("""
         Cancels an order through SP_CANC_ORD and reports what that did.
 
