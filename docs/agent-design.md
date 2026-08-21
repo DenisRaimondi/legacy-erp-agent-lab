@@ -160,9 +160,10 @@ and readable in the source, which matters here — the queries are part of what
 this repo is showing. An ORM would hide them, and on a schema of this vintage it
 would fight the stored procedures rather than help.
 
-**Model: `deepseek-chat`**, reached through Semantic Kernel's OpenAI connector
-pointed at DeepSeek's OpenAI-compatible endpoint. Function calling is a hard
-requirement, which rules out `deepseek-reasoner`. DeepSeek has no embeddings
+**Provider-agnostic by configuration.** The agent talks to an `IChatClient` and
+never learns which service answered: Azure OpenAI when an endpoint and key are
+set, DeepSeek otherwise. Function calling is a hard requirement either way,
+which on DeepSeek rules out `deepseek-reasoner`. DeepSeek has no embeddings
 endpoint, so the RAG layer will need a separate embedding source; that decision
 belongs to layer 2 and is deferred.
 
